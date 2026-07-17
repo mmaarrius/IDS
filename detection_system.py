@@ -140,7 +140,8 @@ class detectionEngine:
                     'method': 'zscore',         
                     'feature': feature_name,
                     'z_score': round(float(z), 2),
-                    'confidence': min(1.0, abs(z) / (threshold * 2))
+                    # float() so this serializes as a plain number, not np.float64(...)
+                    'confidence': min(1.0, float(abs(z)) / (threshold * 2))
                 })
         return anomalies
  
@@ -167,7 +168,8 @@ class detectionEngine:
                 'type': 'anomaly',
                 'method': 'lof',
                 'score': round(float(score), 3),
-                'confidence': min(1.0, abs(score))
+                # float() so this serializes as a plain number, not np.float64(...)
+                'confidence': min(1.0, float(abs(score)))
             }]
         return []
  

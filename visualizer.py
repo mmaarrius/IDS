@@ -1,5 +1,6 @@
 import ast
 import os
+import re
 
 import pandas as pd
 import streamlit as st
@@ -30,9 +31,12 @@ def load_alerts():
     df = df.dropna(subset=["timestamp"])
 
     # 'details' is a Python-dict string; pull out the rule/method as one label.
+    # Older rows may contain np.float64(...) wrappers, which ast.literal_eval
+    # rejects; strip them to a bare number first so those rows still parse.
     def label(details):
+        cleaned = re.sub(r"np\.float64\(([^)]*)\)", r"\1", str(details))
         try:
-            d = ast.literal_eval(details)
+            d = ast.literal_eval(cleaned)
             return d.get("rule") or d.get("method") or d.get("type") or "unknown"
         except (ValueError, SyntaxError):
             return "unknown"

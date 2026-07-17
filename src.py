@@ -5,7 +5,7 @@ from traffic_analysis import trafficAnalyzer
 import argparse
 import queue
 import time
-from scapy.all import IP, TCP, ARP, rdpcap
+from scapy.all import IP, TCP, ARP, rdpcap, conf
 
 # LOF cannot fit on fewer samples than its n_neighbors setting.
 MIN_BASELINE_SAMPLES = 20
@@ -136,13 +136,17 @@ class intrusionDetectionSystem:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Network intrusion detection system")
-    parser.add_argument("--interface", default="wlp1s0",
-                        help="interface to sniff (default: wlp1s0)")
+    parser.add_argument("--interface", default=None,
+                        help="interface to sniff (default: system's default route)")
     parser.add_argument("--baseline-pcap",
                         help="train from this pcap instead of a live baseline window")
     args = parser.parse_args()
 
-    ids = intrusionDetectionSystem(interface=args.interface)
+    # Fall back to the interface of the system's default route when unspecified.
+    interface = args.interface or conf.route.route("0.0.0.0")[0]
+    print(f"Using interface: {interface}")
+
+    ids = intrusionDetectionSystem(interface=interface)
 
     trained = False
     if args.baseline_pcap:

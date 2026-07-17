@@ -29,12 +29,20 @@ def mac_of(ip, iface):
 
 def main():
     parser = argparse.ArgumentParser(description="ARP spoofing self-test against this machine")
-    parser.add_argument("--gateway", required=True,
-                        help="gateway IP whose identity will be spoofed to this host")
-    parser.add_argument("--iface", default=conf.iface, help="interface to use")
+    parser.add_argument("--gateway", default=None,
+                        help="gateway IP to spoof (default: system's default gateway)")
+    parser.add_argument("--iface", default=None,
+                        help="interface to use (default: system's default route)")
     parser.add_argument("--count", type=int, default=20,
                         help="number of spoofed replies to send (default 20)")
     args = parser.parse_args()
+
+    # Auto-detect interface and gateway from the default route when unspecified.
+    default_iface, _, default_gw = conf.route.route("0.0.0.0")
+    gateway = args.gateway or default_gw
+    iface = args.iface or default_iface
+    args.gateway = gateway
+    args.iface = iface
 
     victim_ip = conf.route.route(args.gateway)[1]  # this machine's IP on that path
     attacker_mac = get_if_hwaddr(args.iface)       # this machine's own MAC
