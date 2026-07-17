@@ -34,15 +34,30 @@ class trafficAnalyzer:
 
             return self.extract_features(packet, stats)
 
+    # A flow shorter than this has not run long enough for a rate over it to
+    # mean anything; dividing by it manufactures huge spurious rates.
+    MIN_RATE_DURATION = 0.01
+
     def extract_features(self, packet, stats):
-        # Using max() to ensure duration is never strictly 0, avoiding ZeroDivisionError
-        duration = max(stats['last_time'] - stats['start_time'], 0.0001)
+        # packet.time is a Decimal; cast so downstream numpy gets plain floats.
+        duration = float(stats['last_time'] - stats['start_time'])
+
+        # Rates are only defined once a flow has real elapsed time. Reporting 0
+        # rather than a rate divided by a fake floor keeps the invented ~10000
+        # packets/s of a flow's first packet out of both training and detection.
+        if duration < self.MIN_RATE_DURATION:
+            packet_rate = 0.0
+            byte_rate = 0.0
+        else:
+            packet_rate = stats['packet_count'] / duration
+            byte_rate = stats['byte_count'] / duration
 
         return {
             'packet_size': len(packet),
             'flow_duration': duration,
-            'packet_rate': stats['packet_count'] / duration,
-            'byte_rate': stats['byte_count'] / duration,
+            'packet_rate': packet_rate,
+            'byte_rate': byte_rate,
             'tcp_flags': packet[TCP].flags,
-            'window_size': packet[TCP].window
+            'window_size': packet[TCP].window,
+            'dest_port': packet[TCP].dport
         }

@@ -5,7 +5,7 @@ from traffic_analysis import trafficAnalyzer
 import argparse
 import queue
 import time
-from scapy.all import IP, TCP, rdpcap
+from scapy.all import IP, TCP, ARP, rdpcap
 
 # LOF cannot fit on fewer samples than its n_neighbors setting.
 MIN_BASELINE_SAMPLES = 20
@@ -69,6 +69,27 @@ class intrusionDetectionSystem:
         while True:
             try:
                 packet = self.packet_capture.packet_queue.get(timeout=1)
+
+                # ARP packets carry no IP/TCP layer, so they bypass the traffic
+                # analyzer entirely and go straight to the ARP detector. This
+                # runs regardless of the anomaly model's training state.
+                if ARP in packet:
+                    for threat in self.detection_engine.check_arp_spoofing(packet):
+                        self.alert_system.generate_alert(threat, {
+                            'source_ip': threat['ip'],
+                            'destination_ip': None
+                        })
+                    continue
+
+                # Port scan detection is stateful across packets and does not
+                # depend on the anomaly model, so run it on every TCP packet,
+                # including during the baseline phase.
+                for threat in self.detection_engine.check_port_scan(packet):
+                    self.alert_system.generate_alert(threat, {
+                        'source_ip': threat['ip'],
+                        'destination_ip': packet[IP].dst
+                    })
+
                 features = self.traffic_analyzer.analyze_packet(packet)
 
                 if features:
@@ -102,6 +123,11 @@ class intrusionDetectionSystem:
                             self.alert_system.generate_alert(threat, packet_info)
 
             except queue.Empty:
+                if self.packet_capture.capture_error:
+                    print(f"Capture failed: {self.packet_capture.capture_error}")
+                    if isinstance(self.packet_capture.capture_error, PermissionError):
+                        print("Sniffing needs root. Try: sudo ./venv/bin/python src.py ...")
+                    break
                 continue
             except KeyboardInterrupt:
                 print("Stopping IDS.....")
