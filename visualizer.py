@@ -57,26 +57,52 @@ def dashboard():
                 "--baseline-pcap baseline.pcap). This refreshes automatically.")
         return
 
+    # Signature detectors are real attacks (not anomaly noise) — surface them.
+    ATTACKS = {
+        "arp_spoofing": "ARP SPOOFING",
+        "port_scan": "PORT SCAN",
+        "syn_flood": "SYN FLOOD",
+    }
+    attacks = df[df["detector"].isin(ATTACKS)]
+
+    # Clean, readable column labels for the tables.
+    LABELS = {
+        "timestamp": "Time",
+        "detector": "Detector",
+        "source_ip": "Source IP",
+        "destination_ip": "Destination IP",
+        "confidence": "Confidence",
+        "details": "Details",
+    }
+
+    def show_table(frame, cols):
+        st.dataframe(frame[cols].rename(columns=LABELS),
+                     width="stretch", hide_index=True)
+
     # --- Top-line metrics -----------------------------------------------------
-    arp = df[df["detector"] == "arp_spoofing"]
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total alerts", len(df))
-    c2.metric("ARP spoofing", len(arp))
+    c2.metric("Attack alerts", len(attacks))
     c3.metric("Unique source IPs", df["source_ip"].nunique())
     c4.metric("High confidence (>0.8)", int((df["confidence"] > 0.8).sum()))
 
-    # ARP is the attack we specifically want to surface — call it out loudly.
-    if not arp.empty:
-        st.error(f"ARP SPOOFING DETECTED — {len(arp)} alert(s)")
-        st.dataframe(arp[["timestamp", "source_ip", "details"]], width="stretch")
+    # Call out each attack type loudly, with its own red banner.
+    for detector, name in ATTACKS.items():
+        hits = df[df["detector"] == detector]
+        if not hits.empty:
+            st.error(f"{name} DETECTED — {len(hits)} alert(s)")
+            show_table(hits.sort_values("timestamp", ascending=False).head(20),
+                       ["timestamp", "source_ip", "details"])
 
     # --- Alerts by detector ---------------------------------------------------
+    # horizontal=True puts the category labels on the y-axis, where they read
+    # left-to-right instead of being rotated vertically on the x-axis.
     st.subheader("Alerts by detector")
-    st.bar_chart(df["detector"].value_counts())
+    st.bar_chart(df["detector"].value_counts(), horizontal=True)
 
     # --- Top source IPs -------------------------------------------------------
     st.subheader("Top 10 source IPs by alert count")
-    st.bar_chart(df["source_ip"].value_counts().head(10))
+    st.bar_chart(df["source_ip"].value_counts().head(10), horizontal=True)
 
     # --- Alerts over time -----------------------------------------------------
     st.subheader("Alerts over time")
@@ -85,10 +111,9 @@ def dashboard():
 
     # --- Raw feed -------------------------------------------------------------
     st.subheader("Recent alerts")
-    st.dataframe(
-        df.sort_values("timestamp", ascending=False)
-          .head(200)[["timestamp", "detector", "source_ip", "destination_ip", "confidence"]],
-        width="stretch",
+    show_table(
+        df.sort_values("timestamp", ascending=False).head(200),
+        ["timestamp", "detector", "source_ip", "destination_ip", "confidence"],
     )
 
 

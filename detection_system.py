@@ -34,6 +34,52 @@ class detectionEngine:
         # one per packet.
         self.last_scan_alert = {}
 
+        # Per-source-IP list of timestamps of SYN-only packets, for SYN flood
+        # detection. A flood is a burst of many SYNs in a short window. The old
+        # per-flow rule could never fire because a flood spreads across many
+        # flows, each with too few packets to build a rate.
+        self.syn_times = defaultdict(list)
+        self.SYN_FLOOD_WINDOW = 2.0     # seconds of SYNs to keep per source
+        self.SYN_FLOOD_THRESHOLD = 100  # SYNs in the window -> flood
+        self.last_syn_alert = {}
+
+    def check_syn_flood(self, packet, now=None):
+        if not (packet.haslayer(IP) and packet.haslayer(TCP)):
+            return []
+
+        # SYN-only (flags == 2): a connection attempt with no ACK. A flood is
+        # many of these; a normal handshake sends just one per connection.
+        if int(packet[TCP].flags) != 2:
+            return []
+
+        now = time.time() if now is None else now
+        src = packet[IP].src
+
+        times = self.syn_times[src]
+        times.append(now)
+
+        # Drop SYNs older than the window.
+        cutoff = now - self.SYN_FLOOD_WINDOW
+        while times and times[0] < cutoff:
+            times.pop(0)
+
+        if len(times) < self.SYN_FLOOD_THRESHOLD:
+            return []
+
+        # One alert per source per window, not one per packet.
+        last = self.last_syn_alert.get(src, 0)
+        if now - last < self.SYN_FLOOD_WINDOW:
+            return []
+        self.last_syn_alert[src] = now
+
+        return [{
+            'type': 'signature',
+            'rule': 'syn_flood',
+            'ip': src,
+            'syn_count': len(times),
+            'confidence': 1.0
+        }]
+
     def check_port_scan(self, packet, now=None):
         if not (packet.haslayer(IP) and packet.haslayer(TCP)):
             return []
@@ -97,9 +143,6 @@ class detectionEngine:
     def check_signature_rules(self, features):
         
         threats = []
-        
-        if features['tcp_flags'] == 2 and features['packet_rate'] > 100:
-            threats.append({'type': 'signature', 'rule': 'syn_flood', 'confidence': 1.0})
 
         if features.get('dest_port') in [21, 23]:
             threats.append({'type': 'signature', 'rule': 'dangerous_port', 'confidence': 1.0})

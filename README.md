@@ -23,6 +23,10 @@ rm -f alerts.csv ids_alerts.log
 sudo ./venv/bin/python src.py --baseline-pcap baseline.pcap
 ```
 
+The interface is auto-detected from your default route. If you switched networks
+since the last capture, retrain the baseline first (see "Retraining the baseline
+on a new network" below), or the anomaly detectors will be very noisy.
+
 ### 2. Start the dashboard (another terminal)
 
 ```bash
@@ -37,7 +41,7 @@ that's normal until alerts appear.
 **ARP spoofing** — use your gateway's IP:
 
 ```bash
-sudo ./venv/bin/python arp_attack_test.py --gateway 10.41.0.1
+sudo ./venv/bin/python3 arp_attack_test.py --target <IP-LAPTOP_TARGET>
 ```
 
 It poisons only this machine's ARP cache and restores it on Ctrl-C. Within a few
@@ -62,17 +66,49 @@ Alerts go to two files:
 Both are append-only across runs. Delete them before a fresh run if you want
 clean numbers.
 
-## Regenerating the baseline
+## Retraining the baseline on a new network
 
-`baseline.pcap` is a capture of normal traffic. To make a new one (~2 minutes of
-ordinary browsing while it runs):
+**The baseline is tied to the network it was captured on.** `baseline.pcap` is a
+recording of *your* normal traffic, and the anomaly detectors (LOF, z-score)
+compare live traffic against it. Move to a different network (new Wi-Fi, cable,
+phone hotspot) and the old baseline no longer matches — the anomaly detectors
+will fire on almost everything, because their idea of "normal" is from somewhere
+else. Signature detectors (ARP, port scan, SYN flood) are not affected; they
+don't use the baseline.
+
+So whenever you change network, recapture the baseline before running.
+
+### 1. Find your current interface
 
 ```bash
-sudo tcpdump -i wlp1s0 -w baseline.pcap -n 'tcp' -G 120 -W 1
+ip route get 1.1.1.1
 ```
 
-The more representative the baseline is of your normal traffic, the fewer false
-alarms the anomaly detection produces.
+The word after `dev` is your active interface (e.g. `wlp1s0` for Wi-Fi,
+`enxXXXX` for a USB/cable adapter).
+
+### 2. Capture ~2 minutes of normal traffic
+
+Run this, then browse normally (open several sites, let background apps talk) so
+the capture reflects a realistic mix. It stops itself after 120 seconds.
+
+```bash
+sudo tcpdump -i <interface> -w baseline.pcap -n 'tcp' -G 120 -W 1
+```
+
+The longer and more varied the capture, the wider the model's idea of "normal",
+and the fewer false alarms you get. A too-short capture makes LOF flag any
+activity it didn't happen to see.
+
+### 3. Run the IDS on the new baseline
+
+```bash
+rm -f alerts.csv ids_alerts.log     # clear old alerts for clean numbers
+sudo ./venv/bin/python src.py --baseline-pcap baseline.pcap
+```
+
+The interface is auto-detected from your default route, so no `--interface` flag
+is needed unless you want a specific one (e.g. `--interface lo` for local tests).
 
 ## Tuning
 

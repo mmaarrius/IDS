@@ -10,6 +10,18 @@ from scapy.all import IP, TCP, ARP, rdpcap, conf
 # LOF cannot fit on fewer samples than its n_neighbors setting.
 MIN_BASELINE_SAMPLES = 20
 
+# Seconds after the model goes active during which anomaly (not signature)
+# alerts are suppressed, while fresh flows' rates settle down.
+WARMUP_SECONDS = 5
+
+# Only emit anomaly (zscore/lof) alerts at least this confident. Signatures are
+# always 1.0, so this filters noise without touching real attack detections.
+MIN_ANOMALY_CONFIDENCE = 0.9
+
+# LOF/z-score run per packet, so one sustained anomalous flow floods hundreds of
+# alerts. Emit at most one anomaly alert per source IP per this many seconds.
+ANOMALY_COOLDOWN_SECONDS = 30
+
 class intrusionDetectionSystem:
     def __init__(self, interface="wlp1s0"):
         self.packet_capture = packetCapture()
@@ -61,6 +73,14 @@ class intrusionDetectionSystem:
         is_trained = trained
         start_time = time.time()
 
+        # When the model goes active, live flows are all fresh and their rates
+        # are volatile, producing a burst of anomaly false positives. Suppress
+        # anomaly alerts (not signatures) for a short warm-up while flows settle.
+        active_since = start_time if is_trained else None
+
+        # source IP -> last time we emitted an anomaly alert for it (cooldown).
+        anomaly_last_alert = {}
+
         if is_trained:
             print("IDS is ACTIVE (model pre-trained from pcap).")
         else:
@@ -81,10 +101,16 @@ class intrusionDetectionSystem:
                         })
                     continue
 
-                # Port scan detection is stateful across packets and does not
-                # depend on the anomaly model, so run it on every TCP packet,
-                # including during the baseline phase.
+                # Port scan and SYN flood detection are stateful across packets
+                # and do not depend on the anomaly model, so run them on every
+                # TCP packet, including during the baseline phase.
                 for threat in self.detection_engine.check_port_scan(packet):
+                    self.alert_system.generate_alert(threat, {
+                        'source_ip': threat['ip'],
+                        'destination_ip': packet[IP].dst
+                    })
+
+                for threat in self.detection_engine.check_syn_flood(packet):
                     self.alert_system.generate_alert(threat, {
                         'source_ip': threat['ip'],
                         'destination_ip': packet[IP].dst
@@ -108,11 +134,37 @@ class intrusionDetectionSystem:
                             print(f"Training model on {len(training_samples)} packets...")
                             self.detection_engine.train_anomaly_detector(training_samples)
                             is_trained = True
+                            active_since = time.time()
                             print("Phase 2: IDS is now ACTIVE.")
 
                     # Only run detection if the model is ready
                     else:
                         threats = self.detection_engine.detect_threats(features)
+
+                        # Drop low-confidence anomaly alerts; signatures (1.0)
+                        # always pass. Cuts most of the anomaly false-positive noise.
+                        threats = [
+                            t for t in threats
+                            if t.get('type') != 'anomaly'
+                            or t.get('confidence', 0) >= MIN_ANOMALY_CONFIDENCE
+                        ]
+
+                        # During warm-up, drop anomaly alerts (zscore/lof) while
+                        # fresh flows settle; keep signature alerts (real attacks).
+                        warming_up = time.time() - active_since < WARMUP_SECONDS
+                        if warming_up:
+                            threats = [t for t in threats if t.get('type') != 'anomaly']
+
+                        # Cooldown: collapse a sustained anomalous flow's per-packet
+                        # alerts into one per source IP per window. Signatures pass.
+                        if any(t.get('type') == 'anomaly' for t in threats):
+                            src = packet[IP].src
+                            now = time.time()
+                            if now - anomaly_last_alert.get(src, 0) < ANOMALY_COOLDOWN_SECONDS:
+                                threats = [t for t in threats if t.get('type') != 'anomaly']
+                            else:
+                                anomaly_last_alert[src] = now
+
                         for threat in threats:
                             packet_info = {
                                 'source_ip': packet[IP].src,
