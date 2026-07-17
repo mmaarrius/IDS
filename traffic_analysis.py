@@ -1,18 +1,18 @@
 #TRAFFIC ANALYSIS MODULE  
-from scapy.all import sniff, IP, TCP
+from scapy.all import IP, TCP
 from collections import defaultdict
-import threading
-import queue
 
 class trafficAnalyzer:
+    MIN_RATE_DURATION = 0.05
+    FLOW_TTL = 60.0
     def __init__(self):
-        self.connections = defaultdict(list)
         self.flow_stats = defaultdict(lambda:{
             'packet_count' : 0,
             'byte_count': 0,
             'start_time': None,
             'last_time': None
         })
+        self.last_cleanup = 0.0
 
     def analyze_packet(self, packet):
         if IP in packet and TCP in packet:
@@ -21,22 +21,31 @@ class trafficAnalyzer:
             port_src = packet[TCP].sport
             port_dst = packet[TCP].dport
 
-            flow_key = (ip_src, ip_dst, port_src, port_dst)
+            flow_key = tuple(sorted([(ip_src, port_src), (ip_dst, port_dst)]))
 
             stats = self.flow_stats[flow_key]
             stats['packet_count'] += 1
             stats['byte_count'] += len(packet)
             current_time = packet.time
 
-            if not stats['start_time']:
+            if stats['start_time'] is None:
                 stats['start_time'] = current_time
             stats['last_time'] = current_time  
 
+            if stats['packet_count'] < 3:
+                return None
             return self.extract_features(packet, stats)
 
     # A flow shorter than this has not run long enough for a rate over it to
     # mean anything; dividing by it manufactures huge spurious rates.
-    MIN_RATE_DURATION = 0.01
+    def cleanup(self, now):
+        if now - self.last_cleanup < 10:
+            return
+        self.last_cleanup = now
+        dead = [k for k, s in self.flow_stats.items()
+                if s['last_time'] and now - float(s['last_time']) > self.FLOW_TTL]
+        for k in dead:
+            del self.flow_stats[k]
 
     def extract_features(self, packet, stats):
         # packet.time is a Decimal; cast so downstream numpy gets plain floats.
