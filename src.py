@@ -5,7 +5,20 @@ from traffic_analysis import trafficAnalyzer
 import argparse
 import queue
 import time
-from scapy.all import IP, TCP, ARP, rdpcap, conf
+from scapy.all import IP, TCP, ARP, Ether, srp, rdpcap, conf
+
+
+def resolve_mac(ip, iface, timeout=3):
+    # Sends our own ARP request and waits for the real reply, out-of-band
+    # from the sniffer. Used to seed a trusted mapping before capture
+    # starts, so we don't have to rely on the target coincidentally
+    # generating fresh legitimate ARP traffic (e.g. via a manual ping)
+    # after an attack has already begun.
+    ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip),
+                 timeout=timeout, iface=iface, verbose=0)
+    for _, rcv in ans:
+        return rcv[Ether].src
+    return None
 
 # LOF cannot fit on fewer samples than its n_neighbors setting.
 MIN_BASELINE_SAMPLES = 20
@@ -67,6 +80,22 @@ class intrusionDetectionSystem:
 
     def start(self, trained=False):
         print(f"Starting IDS on Interface {self.interface}")
+
+        # Seed the gateway's real MAC before sniffing starts. Without this,
+        # check_arp_spoofing() would "learn" whichever MAC answers for the
+        # gateway IP first as the trusted baseline -- if an attack is
+        # already in progress (or starts before any other legitimate ARP
+        # traffic occurs), that first reply could be the spoofed one, and
+        # it would silently be accepted instead of flagged.
+        _, _, gateway_ip = conf.route.route("0.0.0.0")
+        gateway_mac = resolve_mac(gateway_ip, self.interface)
+        if gateway_mac:
+            self.detection_engine.seed_trusted_mapping(gateway_ip, gateway_mac)
+            print(f"Seeded trusted mapping: {gateway_ip} -> {gateway_mac}")
+        else:
+            print(f"Warning: could not resolve gateway {gateway_ip} at startup; "
+                  f"ARP-spoofing detection will trust whichever reply arrives first.")
+
         self.packet_capture.start_capture(self.interface)
 
         training_samples = []

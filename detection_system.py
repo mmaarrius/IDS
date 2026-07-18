@@ -120,6 +120,14 @@ class detectionEngine:
             'confidence': 1.0
         }]
 
+    def seed_trusted_mapping(self, ip, mac):
+        # Pre-populates a known-good IP->MAC pair (e.g. the real gateway,
+        # resolved with a fresh ARP request before capture starts) so the
+        # first ARP reply check_arp_spoofing ever sees for that IP isn't
+        # blindly trusted as the baseline if it happens to already be
+        # spoofed. Call once at startup, before start_capture().
+        self.ip_mac_table[ip] = mac
+
     def check_arp_spoofing(self, packet):
         # Only ARP replies (op == 2) assert "this IP is at this MAC"; requests
         # (op == 1) are just questions and carry no binding to trust.

@@ -10,6 +10,7 @@ from io import BytesIO
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Python Mini IDS Dashboard", layout="wide")
 st.title("Python Mini IDS Dashboard")
@@ -168,9 +169,25 @@ def fire_meme_and_sound(attack_count):
 
     # Play the alarm once, right after a new meme fires.
     if ss.pop("play_sound", False):
-        st.markdown(
-            f'<audio autoplay><source src="{ALARM_URI}" type="audio/wav"></audio>',
-            unsafe_allow_html=True,
+        # A unique id forces the browser to see a brand-new element each time
+        # (Streamlit reuses identical markup, which would suppress a repeat play).
+        # We also call .play() explicitly and log if the browser blocks it, since
+        # autoplay is refused until the user has interacted with the page.
+        uid = f"alarm_{int(now * 1000)}"
+        components.html(
+            f"""
+            <audio id="{uid}" autoplay>
+              <source src="{ALARM_URI}" type="audio/wav">
+            </audio>
+            <script>
+              const a = document.getElementById("{uid}");
+              const p = a.play();
+              if (p !== undefined) {{
+                p.catch(err => console.warn("Alarm blocked by browser:", err));
+              }}
+            </script>
+            """,
+            height=0,
         )
 
 
