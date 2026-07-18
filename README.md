@@ -68,6 +68,32 @@ It never completes the TCP handshake (SYN only, no final ACK), so no real
 connection is ever made. Within a few seconds the "PORT SCAN DETECTED" alert
 appears in the dashboard.
 
+#### Test detection for BruteForce (`bruteforce_test.py`)
+
+```bash
+# IDS terminal:
+rm -f alerts.csv ids_alerts.log
+sudo ./venv/bin/python src.py --baseline-pcap baseline.pcap --interface lo
+```
+
+```bash
+./venv/bin/python -m streamlit run visualizer.py
+```
+
+Our detection test simulates a burst of TCP connection attempts againts a single service. It only opens and closes TCP conections so no credetials are sent. We run it againts our own machine, on ports like 22 (SSH), 21 (FTP), 3389 (RDP), or 2222.
+
+If the target port has nothing listening on it the connections are refused so we need to start a listener first:
+
+```bash
+python -c "import socket; s=socket.socket(); s.bind(('0.0.0.0',2222)); s.listen(5); [s.accept() for _ in range(200)]"
+```
+In another terminal we run the attack:
+
+```bash
+sudo ./venv/bin/python brute_force_test.py --target 127.0.0.1 --port 2222 --count 25 --interval 0.2
+```
+It should be detected and show on the streamlite interface.
+
 ## Results
 
 Alerts go to two files:

@@ -191,6 +191,7 @@ def dashboard():
         "arp_spoofing": "ARP SPOOFING",
         "port_scan": "PORT SCAN",
         "syn_flood": "SYN FLOOD",
+        "bruteforce": "BRUTEFORCE"
     }
     attacks = df[df["detector"].isin(ATTACKS)]
 

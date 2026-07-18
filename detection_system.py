@@ -4,6 +4,7 @@ from scapy.all import ARP, IP, TCP
 from collections import defaultdict
 import time
 import numpy as np
+from scapy.all import DHCP, BOOTP, Ether
 
 class detectionEngine:
 
@@ -42,6 +43,12 @@ class detectionEngine:
         self.SYN_FLOOD_WINDOW = 2.0     # seconds of SYNs to keep per source
         self.SYN_FLOOD_THRESHOLD = 100  # SYNs in the window -> flood
         self.last_syn_alert = {}
+        
+        # for brute force detection
+        self.auth_attempts = defaultdict(list)
+        self.BRUTEFORCE_WINDOW = 10.0
+        self.BRUTEFORCE_THRESHOLD = 15
+        self.last_bruteforce_alert = {}
 
     def check_syn_flood(self, packet, now=None):
         if not (packet.haslayer(IP) and packet.haslayer(TCP)):
@@ -164,6 +171,39 @@ class detectionEngine:
             'byte_rate':   {'mean': data[:, 2].mean(), 'std': data[:, 2].std()},
         }
  
+    def check_bruteforce(self, packet, now=None):
+        if not (packet.haslayer(IP) and packet.haslayer(TCP)):
+            return []
+        if packet[TCP].flags != "S":  # SYN only
+            return []
+        if packet[TCP].dport not in (22, 3389, 21, 2222):
+            return []
+
+        now = time.time() if now is None else now
+        key = (packet[IP].src, packet[IP].dst, packet[TCP].dport)
+
+        attempts = self.auth_attempts[key]
+        attempts.append(now)
+        cutoff = now - self.BRUTEFORCE_WINDOW
+        self.auth_attempts[key] = [t for t in attempts if t > cutoff]
+
+        if len(self.auth_attempts[key]) <= self.BRUTEFORCE_THRESHOLD:
+            return []
+
+        last = self.last_bruteforce_alert.get(key, 0)
+        if now - last < self.BRUTEFORCE_WINDOW:
+            return []
+        self.last_bruteforce_alert[key] = now
+
+        return [{
+        'type': 'signature',
+        'rule': 'bruteforce',
+        'source_ip': packet[IP].src,
+        'destination_ip': packet[IP].dst,
+        'port': packet[TCP].dport,
+        'confidence': 0.9
+        }]
+
     def check_zscore(self, features, threshold=3.0):
         
         anomalies = []

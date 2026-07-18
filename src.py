@@ -104,6 +104,12 @@ class intrusionDetectionSystem:
                 # Port scan and SYN flood detection are stateful across packets
                 # and do not depend on the anomaly model, so run them on every
                 # TCP packet, including during the baseline phase.
+                for threat in self.detection_engine.check_bruteforce(packet):
+                    self.alert_system.generate_alert(threat, {
+                        'source_ip': threat['source_ip'],
+                        'destination_ip': threat['destination_ip']
+                    })
+                    
                 for threat in self.detection_engine.check_port_scan(packet):
                     self.alert_system.generate_alert(threat, {
                         'source_ip': threat['ip'],
