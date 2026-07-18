@@ -47,15 +47,26 @@ sudo ./venv/bin/python3 arp_attack_test.py --target <IP-LAPTOP_TARGET>
 It poisons only this machine's ARP cache and restores it on Ctrl-C. Within a few
 seconds the red "ARP SPOOFING DETECTED" banner appears in the dashboard.
 
-**Port scan** — start the IDS on `lo` and scan localhost, so the traffic is
-guaranteed to pass through the sniffer:
+**Port scan** — sends a TCP SYN to many distinct ports on a target in a short
+window. Start the IDS on `lo` and scan localhost, so the traffic is guaranteed
+to pass through the sniffer:
 
 ```bash
 # IDS terminal:
 sudo ./venv/bin/python src.py --baseline-pcap baseline.pcap --interface lo
 # another terminal:
-nmap -p 1-100 localhost
+sudo ./venv/bin/python port_scanning_test.py --target 127.0.0.1 --iface lo --start-port 1 --end-port 100
 ```
+
+Or against another laptop on the same network, same as the ARP test:
+
+```bash
+sudo ./venv/bin/python port_scanning_test.py --target <IP-LAPTOP_TARGET>
+```
+
+It never completes the TCP handshake (SYN only, no final ACK), so no real
+connection is ever made. Within a few seconds the "PORT SCAN DETECTED" alert
+appears in the dashboard.
 
 ## Results
 
